@@ -5,7 +5,7 @@ Servo ESC;     // create servo object to control the ESC
 #define C_SPEED 80
 #define CC_SPEED 100
 #define NEUTRAL_SPEED 90
-#define SHIFT_TIME 250
+#define MAX_SHIFT_TIME 500  // ms
 
 //Inputs
 #define C_INPUT_PIN 2
@@ -14,6 +14,10 @@ Servo ESC;     // create servo object to control the ESC
 #define CLOCKWISE 2
 #define COUNTER_CLOCKWISE 3
 #define NEUTRAL_RET 4
+
+bool timerRunning = false;
+bool shiftTimedOut = false;
+unsigned long shiftStartMillis = 0;
 
 void setup() {
 
@@ -38,51 +42,88 @@ void setup() {
 
 void loop() {
 
-  int req = GetButtonInput();
-  ESC_Shift(req);
+  int req = getECUInput();
+
+  // if we have recieved a shift signal
+  if (req == CLOCKWISE || req == COUNTER_CLOCKWISE) {
+
+    // check if we're already shifting
+    if (timerRunning) {
+
+      // check if the maximum shift time has been exceeded
+      if (millis() + MAX_SHIFT_TIME > shiftStartMillis) {
+
+        shiftTimedOut = true;
+
+      }
+
+    } else {  // if we're not already shifting
+
+      // start the timer
+      shiftStartMillis = millis();
+      timerRunning = true;
+
+      if (req == CLOCKWISE && !shiftTimedOut) {
+        ESC_Shift(CLOCKWISE);
+      } else if (req == COUNTER_CLOCKWISE && !shiftTimedOut) {
+        ESC_Shift(COUNTER_CLOCKWISE);
+      } else {
+        ESC_Shift(0);
+      }
+
+    }
+
+  } else {  // if we have not recieved a shift signal
+
+    ESC_Shift(0);
+    timerRunning = false;
+    
+  }
+
+
 
 }
 
-int GetButtonInput() {
+int getECUInput() {
 
   //Read inputs
-  int buttonStateC = digitalRead(C_INPUT_PIN);
-  int buttonStateCC = digitalRead(CC_INPUT_PIN);
+  int stateC = digitalRead(C_INPUT_PIN);
+  int stateCC = digitalRead(CC_INPUT_PIN);
 
-  delay(50);//software debounce
-
-  Serial.print(buttonStateC);
-  Serial.println(buttonStateCC);
+  Serial.print(stateC);
+  Serial.println(stateCC);
 
   //check for conflicting signals
-  if( (buttonStateC == HIGH) && (buttonStateCC == HIGH) ) {
+  if( (stateC == HIGH) && (stateCC == HIGH) ) {
     Serial.println("ERROR: CONFLICTING INPUTS");
-    delay(10);
     return -1;
   }
 
   //check for Clockwise input
-  if ( (buttonStateC == HIGH) && (buttonStateCC == LOW)) {return CLOCKWISE;}//clockwise rotate
-  else if ( (buttonStateCC == HIGH) && (buttonStateC == LOW)) {return COUNTER_CLOCKWISE;}//counter-clockwise rotate
-  else {return NEUTRAL_RET;}
+  if (stateC == HIGH && stateCC == LOW) { return CLOCKWISE; }               //clockwise rotate
+  else if (stateCC == HIGH && stateC == LOW) { return COUNTER_CLOCKWISE; }  //counter-clockwise rotate
+  else { return NEUTRAL_RET; }
 }
 
 void ESC_Shift(int command){
 
     if (command > 0) {
-      if(command == CLOCKWISE) {
-          Serial.println("CLOCKWISE SHIFT");
-          ESC.write(C_SPEED);
-          delay(SHIFT_TIME);
-          ESC.write(NEUTRAL_SPEED);
-        }
-      if(command == COUNTER_CLOCKWISE) {
-          Serial.println("COUNTER-CLOCKWISE SHIFT");
-          ESC.write(CC_SPEED);
-          delay(SHIFT_TIME);
-          ESC.write(NEUTRAL_SPEED);
-        }
-       else{ESC.write(NEUTRAL_SPEED);}
-       }
 
+      if(command == CLOCKWISE) {
+
+        Serial.println("CLOCKWISE SHIFT");
+        ESC.write(C_SPEED);
+
+      } else if(command == COUNTER_CLOCKWISE) {
+
+        Serial.println("COUNTER-CLOCKWISE SHIFT");
+        ESC.write(CC_SPEED);
+
+      }
+
+    } else {
+
+      ESC.write(NEUTRAL_SPEED);
+
+    }
 }
