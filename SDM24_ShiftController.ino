@@ -1,129 +1,277 @@
-#include <Servo.h>
+// must be 2 or 3 for interrupts!
+#define DOWN_INPUT_PIN          2
+#define UP_INPUT_PIN            3
 
-Servo ESC;     // create servo object to control the ESC
-//Motor Speed Values for clockwise, counter clockwise, and neutral
-#define C_SPEED 80
-#define CC_SPEED 100
-#define NEUTRAL_SPEED 90
-#define MAX_SHIFT_TIME 500  // ms
+// timeouts
+#define TIMEOUT_ERROR           1000  // ms
+#define TIMEOUT_NEUTRAL_PULSE   10    // ms
 
-//Inputs
-#define C_INPUT_PIN 2
-#define CC_INPUT_PIN 3
+// thresholds
+#define THRESH_NEUTRAL_PULSE    20
 
-#define CLOCKWISE 2
-#define COUNTER_CLOCKWISE 3
-#define NEUTRAL_RET 4
+// neutral settings
+#define NEUTRAL_TIME            90    // ms
+#define NEUTRAL_POWER           50    // %
 
-bool timerRunning = false;
-bool shiftTimedOut = false;
-unsigned long shiftStartMillis = 0;
+// internal states
+#define S_IDLE                  0
+#define S_PULSE_MONITOR         1
+#define S_SHIFTING_NEUTRAL      2
+#define S_SHIFTING_UP           3
+#define S_SHIFTING_DOWN         4
+#define S_LOCKOUT               5
+
+// errors
+#define E_UPSHIFT               0
+#define E_DOWNSHIFT             1
+
+// wire monitors
+volatile bool downshiftRose   =   false;
+volatile bool downshiftFell   =   false;
+volatile bool upshiftFell     =   false;
+volatile bool upshiftRose     =   false;
+
+unsigned int controllerState  =   S_IDLE;
+
+unsigned long pulseMonitorLastTriggered = 0;
+unsigned int neutralPulseCounter = 0;
+
+unsigned long errorTimeoutStartingMillis = millis();
+unsigned int whichLineErrored;
 
 void setup() {
 
-  Serial.begin(9600);
+  pinMode(UP_INPUT_PIN, INPUT);
+  pinMode(DOWN_INPUT_PIN, INPUT);
 
-  pinMode(C_INPUT_PIN, INPUT);
-  pinMode(CC_INPUT_PIN, INPUT);
-
-  // Attach the ESC on pin 9
-  ESC.attach(9,1000,2000); // (pin, min pulse width, max pulse width in microseconds) 
-
-  // calibration procedure
-  ESC.write(NEUTRAL_SPEED);
-  delay(2000);
-  ESC.write(180);
-  delay(500);
-  ESC.write(0);
-  delay(50);
-  ESC.write(NEUTRAL_SPEED);
+  enableInterrupts();
 
 }
 
 void loop() {
 
-  int req = getECUInput();
+  if (controllerState == S_IDLE) {
 
-  // if we have recieved a shift signal
-  if (req == CLOCKWISE || req == COUNTER_CLOCKWISE) {
+    // reset wire monitor vars
+    downshiftFell = false;
+    upshiftFell = false;
 
-    // check if we're already shifting
-    if (timerRunning) {
+    // check wire variables
+    if (downshiftRose) { controllerState = S_SHIFTING_DOWN; } 
+    else if (upshiftRose) { controllerState = S_PULSE_MONITOR; }
 
-      // check if the maximum shift time has been exceeded
-      if (millis() + MAX_SHIFT_TIME > shiftStartMillis) {
+    // TODO: kill output
 
-        shiftTimedOut = true;
+  } else if (controllerState == S_PULSE_MONITOR) {
+
+    disableDownInterrupt();
+    pulseMonitorLastTriggered = millis();
+
+    upshiftRose = false;
+
+    while (pulseMonitorLastTriggered + TIMEOUT_NEUTRAL_PULSE > millis()) {
+
+      if (upshiftRose) {
+
+        neutralPulseCounter += 1;
+        pulseMonitorLastTriggered = millis();
+        upshiftRose = false;
 
       }
 
-    } else {  // if we're not already shifting
+      if (neutralPulseCounter >= THRESH_NEUTRAL_PULSE) {
 
-      // start the timer
-      shiftStartMillis = millis();
-      timerRunning = true;
+        neutralPulseCounter = 0;
+        controllerState = S_SHIFTING_NEUTRAL;
+        break;
 
-      if (req == CLOCKWISE && !shiftTimedOut) {
-        ESC_Shift(CLOCKWISE);
-      } else if (req == COUNTER_CLOCKWISE && !shiftTimedOut) {
-        ESC_Shift(COUNTER_CLOCKWISE);
-      } else {
-        ESC_Shift(0);
       }
 
     }
 
-  } else {  // if we have not recieved a shift signal
+    if (neutralPulseCounter < THRESH_NEUTRAL_PULSE) {
 
-    ESC_Shift(0);
-    timerRunning = false;
-    
-  }
+      controllerState = S_SHIFTING_UP;
 
+    }
 
+  } else if (controllerState == S_SHIFTING_NEUTRAL) {
 
-}
+    // disable interrupts and clear monitors
+    disableInterrupts();
+    downshiftRose   =   false;
+    downshiftFell   =   false;
+    upshiftFell     =   false;
+    upshiftRose     =   false;
 
-int getECUInput() {
+    // set power for specified time
 
-  //Read inputs
-  int stateC = digitalRead(C_INPUT_PIN);
-  int stateCC = digitalRead(CC_INPUT_PIN);
+    enableInterrupts();
+    controllerState = S_IDLE;
 
-  Serial.print(stateC);
-  Serial.println(stateCC);
+  } else if (controllerState == S_SHIFTING_UP) {
 
-  //check for conflicting signals
-  if( (stateC == HIGH) && (stateCC == HIGH) ) {
-    Serial.println("ERROR: CONFLICTING INPUTS");
-    return -1;
-  }
+    disableDownInterrupt();
 
-  //check for Clockwise input
-  if (stateC == HIGH && stateCC == LOW) { return CLOCKWISE; }               //clockwise rotate
-  else if (stateCC == HIGH && stateC == LOW) { return COUNTER_CLOCKWISE; }  //counter-clockwise rotate
-  else { return NEUTRAL_RET; }
-}
+    errorTimeoutStartingMillis = millis();    // record when we started the action
 
-void ESC_Shift(int command){
+    // TODO: set power
 
-    if (command > 0) {
+    // loop until the timeout has not expired
+    while (errorTimeoutStartingMillis + TIMEOUT_ERROR > millis()) {
 
-      if(command == CLOCKWISE) {
+      // if we see the line has gone down, break out of the loop
+      if (upshiftFell) {
 
-        Serial.println("CLOCKWISE SHIFT");
-        ESC.write(C_SPEED);
-
-      } else if(command == COUNTER_CLOCKWISE) {
-
-        Serial.println("COUNTER-CLOCKWISE SHIFT");
-        ESC.write(CC_SPEED);
+        // return to idle
+        controllerState = S_IDLE;
+        break;
 
       }
+
+    }
+
+    // if the loop broke because the timer expired
+    if (errorTimeoutStartingMillis + TIMEOUT_ERROR < millis()) {
+
+      controllerState = S_LOCKOUT;    // go to the lockout state
+      whichLineErrored = E_UPSHIFT;   // record that it was the upshift line that caused the error
 
     } else {
 
-      ESC.write(NEUTRAL_SPEED);
+      enableDownInterrupt();
 
     }
+
+    downshiftRose   =   false;
+    downshiftFell   =   false;
+    upshiftFell     =   false;
+    upshiftRose     =   false;
+
+
+  } else if (controllerState == S_SHIFTING_DOWN) {
+
+    errorTimeoutStartingMillis = millis();    // record when we started the action
+
+    // TODO: set power
+
+    // loop until the timeout has not expired
+    while (errorTimeoutStartingMillis + TIMEOUT_ERROR > millis()) {
+
+      // if we see the line has gone down, break out of the loop
+      if (downshiftFell) {
+
+        // return to idle
+        controllerState = S_IDLE;
+        break;
+
+      }
+
+    }
+
+    // if the loop broke because the timer expired
+    if (errorTimeoutStartingMillis + TIMEOUT_ERROR < millis()) {
+
+      controllerState = S_LOCKOUT;    // go to the lockout state
+      whichLineErrored = E_DOWNSHIFT;   // record that it was the downshift line that caused the error
+
+    }
+
+    // clear the line monitors
+    downshiftRose   =   false;
+    downshiftFell   =   false;
+    upshiftFell     =   false;
+    upshiftRose     =   false;
+
+
+  } else if (controllerState == S_LOCKOUT) {
+
+    // TODO: kill power
+
+    // hold until the line releases
+    while (true) {
+
+      if (whichLineErrored == E_DOWNSHIFT) {
+
+        if (downshiftFell) {
+          break;
+        }
+
+      } else if (whichLineErrored == E_UPSHIFT) {
+
+        if (upshiftFell) {
+          break;
+        }
+
+      } 
+
+    }
+
+    // clear line monitors
+    downshiftRose   =   false;
+    downshiftFell   =   false;
+    upshiftFell     =   false;
+    upshiftRose     =   false;
+
+    enableInterrupts();
+    controllerState = S_IDLE;
+
+  } else { controllerState = S_IDLE; }
+
+  
+
+}
+
+void ISRDown() {
+
+  disableInterrupts();
+
+  if (digitalRead(DOWN_INPUT_PIN)) {
+    downshiftRose = true;
+  } else {
+    downshiftFell = true;
+  }
+
+  enableInterrupts();
+  
+}
+
+void ISRUp() {
+
+  disableInterrupts();
+
+  if (digitalRead(UP_INPUT_PIN)) {
+    upshiftRose = true;
+  } else {
+    upshiftFell = true;
+  }
+
+  enableInterrupts();
+  
+}
+
+void disableUpInterrupt() {
+  detachInterrupt(digitalPinToInterrupt(UP_INPUT_PIN));
+}
+
+void disableDownInterrupt() {
+  detachInterrupt(digitalPinToInterrupt(DOWN_INPUT_PIN));
+}
+
+void enableUpInterrupt() {
+  attachInterrupt(digitalPinToInterrupt(UP_INPUT_PIN), ISRUp, CHANGE);
+}
+
+void enableDownInterrupt() {
+  attachInterrupt(digitalPinToInterrupt(DOWN_INPUT_PIN), ISRDown, CHANGE);
+}
+
+void disableInterrupts() {
+  disableDownInterrupt();
+  disableUpInterrupt();
+}
+
+void enableInterrupts() {
+  enableDownInterrupt();
+  enableUpInterrupt();
 }
