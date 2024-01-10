@@ -54,6 +54,9 @@ Servo ESC;     // create servo object to control the ESC
 //TODO verify with actual motor setup directions are right
 
 void setup() {
+
+  Serial.begin(115200);
+
   //setup inputs
   pinMode(UP_INPUT_PIN, INPUT);
   pinMode(DOWN_INPUT_PIN, INPUT);
@@ -229,8 +232,10 @@ void ISRDown() {
   disableInterrupts();
   if (digitalRead(DOWN_INPUT_PIN)) {
     downshiftRose = true;
+    Serial.println("DOWNSHIFT - RISE");
   } else {
     downshiftFell = true;
+    Serial.println("DOWNSHIFT - FALL");
   }
   enableInterrupts();
 }
@@ -239,8 +244,10 @@ void ISRUp() {
   disableInterrupts();
   if (digitalRead(UP_INPUT_PIN)) {
     upshiftRose = true;
+    Serial.println("UPSHIFT - RISE");
   } else {
     upshiftFell = true;
+    Serial.println("DOWNSHIFT - FALL");
   }
   enableInterrupts();
 }
