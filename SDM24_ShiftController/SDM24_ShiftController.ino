@@ -69,7 +69,7 @@ void setup() {
 
 void loop() {
 
-
+  //Serial.println(controllerState);
   //Act for each state
   if (controllerState == S_IDLE) {
     //Turn off ESC
@@ -88,7 +88,7 @@ void loop() {
 
     upshiftRose = false;
     //poll for PWM from ECU
-    while (pulseMonitorLastTriggered + TIMEOUT_NEUTRAL_PULSE > millis()) {
+    while ((pulseMonitorLastTriggered + TIMEOUT_NEUTRAL_PULSE) > millis()) {
 
       if (upshiftRose) {
 
@@ -130,9 +130,8 @@ void loop() {
     ESC.write(CC_SPEED);
     delay(N_SHIFT_TIME);
     ESC.write(NEUTRAL_SPEED);
-
-    enableInterrupts();
     controllerState = S_IDLE;
+    enableInterrupts();
 
   } else if (controllerState == S_SHIFTING_UP) {
     //Upshift actuation
@@ -142,7 +141,7 @@ void loop() {
     //Shift UP
     ESC.write(CC_SPEED); //TURN ON OUTPUT
     // loop until the timeout has expired
-    while (errorTimeoutStartingMillis + TIMEOUT_ERROR > millis()) {
+    while ((errorTimeoutStartingMillis + TIMEOUT_ERROR) >= millis()) {
       // if we see the line has gone down, break out of the loop
       if (upshiftFell) {
         //TURN OFF OUTPUT
@@ -154,7 +153,7 @@ void loop() {
     }
 
     // if the loop broke because the timer expired
-    if (errorTimeoutStartingMillis + TIMEOUT_ERROR < millis()) {
+    if ((errorTimeoutStartingMillis + TIMEOUT_ERROR) <= millis()) {
       //TURN OFF OUTPUT immediately
       ESC.write(NEUTRAL_SPEED);
       controllerState = S_LOCKOUT;    // go to the lockout state
@@ -176,7 +175,7 @@ void loop() {
     //SHIFT DOWN
     ESC.write(C_SPEED);//TURN ON OUTPUT
     // loop until the timeout has not expired
-    while (errorTimeoutStartingMillis + TIMEOUT_ERROR > millis()) {
+    while ((errorTimeoutStartingMillis + TIMEOUT_ERROR) >= millis()) {
       // if we see the line has gone down, break out of the loop
       if (downshiftFell) {
         //TURN OFF OUTPUT
@@ -188,7 +187,7 @@ void loop() {
     }
 
     // if the loop broke because the timer expired
-    if (errorTimeoutStartingMillis + TIMEOUT_ERROR < millis()) {
+    if ((errorTimeoutStartingMillis + TIMEOUT_ERROR) <= millis()) {
       ESC.write(NEUTRAL_SPEED);       //Turn off
       controllerState = S_LOCKOUT;    // go to the lockout state
       whichLineErrored = E_DOWNSHIFT;   // record that it was the downshift line that caused the error
@@ -202,7 +201,7 @@ void loop() {
     upshiftRose     =   false;
 
   } else if (controllerState == S_LOCKOUT) {
-
+    Serial.println("IN LOCKOUT");
     // Set to Neutral
     ESC.write(NEUTRAL_SPEED);
     // hold until the line releases
@@ -225,6 +224,7 @@ void loop() {
     //Re-enable normal operation inputs
     enableInterrupts();
     controllerState = S_IDLE;
+    Serial.println("OUT LOCKOUT");
   } else { controllerState = S_IDLE; }
 }
 
